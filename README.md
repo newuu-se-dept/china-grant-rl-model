@@ -13,6 +13,5 @@ cd NeTrainSim-adjusted
 ```
 Run the sample project:
 ```
-mkdir res
 ./build-mac/src/NeTrainSimConsole/NeTrainSim -n src/data/sampleProject/nodesFile.dat -l src/data/sampleProject/linksFile.dat -t src/data/sampleProject/dieselTrain.dat -o res
 ```
