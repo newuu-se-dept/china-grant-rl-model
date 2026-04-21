@@ -4,6 +4,10 @@ __pycache__
 build/
 _build/
 
+**/*.png
+**/*.svg
+**/*.gif
+
 tutorials/**/*.pickle
 tutorials/**/images/
 tutorials/**/*.rst
