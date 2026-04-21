@@ -77,9 +77,17 @@ sphinx-autobuild -b dirhtml --watch ../gymnasium --re-ignore "pickle$" . _build
 
 **Output:** CSV trajectory (second-by-second position, speed, energy) and TXT summary per simulation run.
 
-### Agent Personas
+## RL Environment Design (project-specific)
 
-`.claude/agents/` contains 16 specialized agent markdown files (RL engineer, C++ pro, ML engineer, build engineer, etc.). Invoke them with `claude --agent <name>` or reference them when spawning sub-agents for domain-specific tasks.
+The Gymnasium wrapper around NeTrainSim is the core deliverable. Key design constraints:
+
+- **State space:** train speed (m/s), position along route (m), track grade (%), curvature, remaining distance, current energy level
+- **Action space:** discrete or continuous throttle/brake commands fed back into the simulator's traction model
+- **Reward:** minimize total energy consumption per trip; penalize schedule deviation and speed limit violations
+- **Episode:** one full trip from origin to destination; terminated on arrival or derailment/timeout
+- **Integration point:** wrap `NeTrainSimConsole` via subprocess or extract `Simulator`/`Train` logic into a shared library callable from Python
+- **Preferred RL stack:** Tianshou (thu-ml/tianshou) or Stable-Baselines3; PPO is the default algorithm to try first
+- **Output to parse:** `trainTrajectory_*.csv` — second-by-second position, speed, energy columns
 
 ## Key Data Files
 
