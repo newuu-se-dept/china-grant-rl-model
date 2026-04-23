@@ -1,9 +1,7 @@
 """
 REINFORCE (Vanilla Policy Gradient) training on NeTrainSimEnv using Tianshou 0.5.1.
 
-Phase 1 note: actions do not yet feed back to the simulator (see train_env.py).
-The pipeline is correct end-to-end; replace Phase 1 env with Phase 2 (interactive
-C++ mode) to get real RL control. See CLAUDE.md "C++ Modifications Required".
+Actions are fed to NeTrainSim interactive mode each timestep (notch 0-8).
 
 Run:
     source venv/bin/activate

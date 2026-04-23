@@ -1,17 +1,11 @@
 """
 Gymnasium environment wrapping NeTrainSim for train energy optimization.
 
-Phase 1 (current — no C++ changes required):
-  reset() runs the full A→B simulation via subprocess, loads the trajectory CSV.
-  step() advances through the CSV one row per call; the action is RECORDED in
-  info["notch"] but does NOT feed back to the simulator — the physics is fixed.
-  This lets you test the full Gymnasium/Tianshou pipeline end-to-end and verify
-  that reward signals are sensible before Phase 2 is ready.
-
-Phase 2 (TODO — requires C++ --interactive flag in main.cpp):
-  The simulator runs one timestep per step() call, reads action from stdin,
-  writes state to stdout. Replace _run_simulation() + _advance() with the
-  interactive subprocess protocol described in CLAUDE.md.
+Phase 2 (interactive):
+  reset() starts the simulator in interactive mode, then sends notch=0 once to
+  get the first timestep state.
+  step(action) sends {"notch": N} to simulator stdin and reads the next state
+  JSON from stdout (prefixed by "NTS_JSON ").
 
 Observation space (7 floats):
   [speed_mps, position_m, grade_perc, curvature_perc,
@@ -20,10 +14,9 @@ Observation space (7 floats):
 Action space: Discrete(9) — notch 0-8 (maps to locomotive currentLocNotch)
 """
 
-import csv
+import json
 import os
 import subprocess
-import tempfile
 
 import gymnasium as gym
 import numpy as np
@@ -40,6 +33,7 @@ LINKS_FILE  = os.path.join(_REPO, "data", "netrainsim", "linksFile.dat")
 TRAINS_FILE = os.path.join(_REPO, "data", "netrainsim", "trainsFile.dat")
 
 TOTAL_ROUTE_LENGTH_M = 74_869.6  # computed from coordinates.csv
+STATE_PREFIX = "NTS_JSON "
 
 
 class NeTrainSimEnv(gym.Env):
@@ -54,8 +48,8 @@ class NeTrainSimEnv(gym.Env):
 
     def __init__(self):
         super().__init__()
-        self._trajectory: list[dict] = []
-        self._step_idx: int = 0
+        self._proc: subprocess.Popen | None = None
+        self._last_state: dict | None = None
         self._prev_energy: float = 0.0
 
         if not os.path.isfile(SIMULATOR_BIN):
@@ -71,21 +65,27 @@ class NeTrainSimEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self._trajectory = self._run_simulation()
-        self._step_idx = 0
-        self._prev_energy = 0.0
-        obs = self._row_to_obs(self._trajectory[0])
-        return obs, {"total_steps": len(self._trajectory)}
+        self.close()
+        self._start_interactive_simulator()
+        state = self._send_action_and_read_state(0)
+        self._last_state = state
+        self._prev_energy = float(state["energy_kwh"])
+        obs = self._state_to_obs(state)
+        return obs, {"mode": "interactive"}
 
     def step(self, action: int):
-        self._step_idx = min(self._step_idx + 1, len(self._trajectory) - 1)
-        row = self._trajectory[self._step_idx]
+        notch = int(action)
+        if notch < 0 or notch > 8:
+            raise ValueError(f"Action notch must be in [0, 8], got {notch}")
 
-        obs = self._row_to_obs(row)
-        energy_kwh   = float(row["EnergyConsumption_KWH"])
-        speed_mps    = float(row["Speed_mps"])
-        max_speed    = float(row["LinkMaxSpeed_mps"])
-        position_m   = float(row["TravelledDistance_m"])
+        state = self._send_action_and_read_state(notch)
+        self._last_state = state
+
+        obs = self._state_to_obs(state)
+        energy_kwh = float(state["energy_kwh"])
+        speed_mps = float(state["speed_mps"])
+        max_speed = float(state["link_max_speed_mps"])
+        position_m = float(state["position_m"])
 
         delta_energy  = energy_kwh - self._prev_energy
         self._prev_energy = energy_kwh
@@ -93,8 +93,8 @@ class NeTrainSimEnv(gym.Env):
         speed_penalty = 0.1 * max(0.0, speed_mps - max_speed)
         reward = -delta_energy - speed_penalty
 
-        terminated = position_m >= TOTAL_ROUTE_LENGTH_M
-        truncated  = self._step_idx >= len(self._trajectory) - 1 and not terminated
+        terminated = bool(state["terminated"]) or position_m >= TOTAL_ROUTE_LENGTH_M
+        truncated = False
 
         if terminated:
             reward += 100.0
@@ -102,66 +102,84 @@ class NeTrainSimEnv(gym.Env):
             reward -= 50.0
 
         info = {
-            "notch":      int(action),
+            "notch":      notch,
             "energy_kwh": energy_kwh,
             "speed_mps":  speed_mps,
             "position_m": position_m,
+            "timestep": float(state["timestep"]),
         }
         return obs, float(reward), terminated, truncated, info
 
     def close(self):
-        pass
+        if self._proc is None:
+            return
+        try:
+            if self._proc.stdin and not self._proc.stdin.closed:
+                self._proc.stdin.close()
+        finally:
+            if self._proc.poll() is None:
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+                    self._proc.wait(timeout=5)
+            self._proc = None
 
     # ── Internal helpers ────────────────────────────────────────────────────
 
-    def _run_simulation(self) -> list[dict]:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            proc = subprocess.run(
-                [SIMULATOR_BIN,
-                 "-n", NODES_FILE,
-                 "-l", LINKS_FILE,
-                 "-t", TRAINS_FILE,
-                 "-o", tmpdir,
-                 "-e", "true",  # enable trajectory CSV export (-e takes a value, not a bare flag)
-                 "-p", "1.0", # 1-second timestep
-                 ],
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-            if proc.returncode != 0:
-                raise RuntimeError(
-                    f"Simulator exited with code {proc.returncode}.\n"
-                    f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
-                )
-            csv_files = [
-                f for f in os.listdir(tmpdir)
-                if f.startswith("trainTrajectory") and f.endswith(".csv")
-            ]
-            if not csv_files:
-                raise RuntimeError(
-                    "Simulator produced no trajectory CSV.\n"
-                    f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
-                )
-            trajectory: list[dict] = []
-            with open(os.path.join(tmpdir, csv_files[0])) as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    trajectory.append(dict(row))
+    def _start_interactive_simulator(self) -> None:
+        self._proc = subprocess.Popen(
+            [SIMULATOR_BIN,
+             "-n", NODES_FILE,
+             "-l", LINKS_FILE,
+             "-t", TRAINS_FILE,
+             "-p", "1.0",
+             "-I"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
 
-        if not trajectory:
-            raise RuntimeError("Trajectory CSV is empty — check simulator output.")
-        return trajectory
+    def _send_action_and_read_state(self, notch: int) -> dict:
+        if self._proc is None or self._proc.stdin is None or self._proc.stdout is None:
+            raise RuntimeError("Interactive simulator process is not running.")
 
-    def _row_to_obs(self, row: dict) -> np.ndarray:
-        position   = float(row["TravelledDistance_m"])
+        payload = json.dumps({"notch": int(notch)})
+        try:
+            self._proc.stdin.write(payload + "\n")
+            self._proc.stdin.flush()
+        except BrokenPipeError as exc:
+            raise RuntimeError("Simulator stdin pipe is closed.") from exc
+
+        while True:
+            line = self._proc.stdout.readline()
+            if line == "":
+                rc = self._proc.poll()
+                raise RuntimeError(
+                    f"Simulator terminated before returning state. returncode={rc}"
+                )
+            line = line.strip()
+            if not line.startswith(STATE_PREFIX):
+                continue
+            raw_json = line[len(STATE_PREFIX):]
+            try:
+                state = json.loads(raw_json)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"Invalid simulator state JSON: {raw_json}") from exc
+            return state
+
+    def _state_to_obs(self, state: dict) -> np.ndarray:
+        position = float(state["position_m"])
         remaining  = max(0.0, TOTAL_ROUTE_LENGTH_M - position)
         return np.array([
-            float(row["Speed_mps"]),
+            float(state["speed_mps"]),
             position,
-            float(row["GradeAtTip_Perc"]),
-            float(row["CurvatureAtTip_Perc"]),
+            float(state["grade_perc"]),
+            float(state["curvature_perc"]),
             remaining,
-            float(row["EnergyConsumption_KWH"]),
-            float(row["LinkMaxSpeed_mps"]),
+            float(state["energy_kwh"]),
+            float(state["link_max_speed_mps"]),
         ], dtype=np.float32)

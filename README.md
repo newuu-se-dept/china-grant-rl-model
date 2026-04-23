@@ -2,6 +2,8 @@
 
 Reinforcement learning for train energy optimization. A Tianshou REINFORCE agent learns to control locomotive throttle (notch 0–8) each second to minimize energy over a 74.9 km A→B trip.
 
+Handoff between coding agents: `pnpm dlx continues`
+
 **Components:** NeTrainSim (C++ simulator) · Gymnasium env wrapper · Tianshou REINFORCE training
 
 ## Setup

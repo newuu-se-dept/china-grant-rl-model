@@ -12,8 +12,12 @@
 #include <sstream>
 #include <QCoreApplication>
 #include <QCommandLineParser>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <stdio.h>
 #include <filesystem>
+#include <algorithm>
 #include "qdir.h"
 #include "simulatorapi.h"
 #include "errorhandler.h"
@@ -133,6 +137,10 @@ int main(int argc, char *argv[])
                                                              QCoreApplication::translate("main", "[Optional] the speed priority factor in case of optimization. \n Default is '0.0'."), "OptimizationSpeedFactor", "0.0");
     parser.addOption(optimizationSpeedPriorityFactor);
 
+    const QCommandLineOption interactiveOption(QStringList() << "I" << "interactive",
+                                               QCoreApplication::translate("main", "[Optional] enable interactive RL mode (JSON over stdin/stdout)."));
+    parser.addOption(interactiveOption);
+
     // process all the arguments
     parser.process(app);
 
@@ -158,6 +166,7 @@ int main(int argc, char *argv[])
     double optimize_speedfactor = 0.0;
     int optimizerFrequency = 0;
     int lookahead = 0;
+    bool interactiveMode = false;
 
     // read values from the cmd
     // read required values
@@ -210,6 +219,8 @@ int main(int argc, char *argv[])
     if (checkParserValue(parser, optimizationSpeedPriorityFactor, "", 0.0)) {optimize_speedfactor = parser.value(optimizationSpeedPriorityFactor).toDouble(); }
     else { optimize_speedfactor = 0.0;}
 
+    interactiveMode = parser.isSet(interactiveOption);
+
     try {
         std::cout << "Reading Trains!                 \r";
 
@@ -242,17 +253,129 @@ int main(int argc, char *argv[])
         sim->setExportInstantaneousTrajectory(exportInstaTraj,
                                               instaTrajFilename);
 
-        // run the actual simulation
-        std::cout <<"Starting the Simulator!                                "
-                     "              \n";
-        sim->runSimulation();
-        // Drain any queued Qt events posted during simulation (e.g. from
-        // queued signal connections in SimulatorAPI) before QCoreApplication
-        // is destroyed.  Without this the static SimulatorAPI singleton
-        // outlives QCoreApplication and the deferred event delivery triggers
-        // a use-after-free segfault during app destruction.
-        QCoreApplication::processEvents();
-        std::cout << "Output folder: " << sim->getOutputFolder() << std::endl;
+        if (interactiveMode) {
+            sim->initializeSimulator(false);
+            std::cout << "Starting the Simulator in interactive mode.\n";
+            std::cout.flush();
+
+            auto emitInteractiveState = [&]() {
+                QJsonObject state;
+                auto currentTrains = SimulatorAPI::ContinuousMode::getTrains(NETWORK_NAME);
+                const bool terminated = sim->checkAllTrainsReachedDestination();
+                const double timestep = sim->getCurrentStateAsJson()["CurrentSimulationTime"].toDouble();
+
+                state["timestep"] = timestep;
+                state["speed_mps"] = 0.0;
+                state["position_m"] = 0.0;
+                state["grade_perc"] = 0.0;
+                state["curvature_perc"] = 0.0;
+                state["remaining_dist_m"] = 0.0;
+                state["energy_kwh"] = 0.0;
+                state["link_max_speed_mps"] = 0.0;
+                state["terminated"] = terminated;
+                state["notch"] = 0;
+
+                if (!currentTrains.empty()) {
+                    const auto &train = currentTrains.front();
+                    double grade = 0.0;
+                    double curvature = 0.0;
+                    double linkMaxSpeed = 0.0;
+                    int notch = 0;
+
+                    if (train->currentFirstLink != nullptr) {
+                        if (!train->currentFirstLink->grade.empty()) {
+                            grade = train->currentFirstLink->grade.begin()->second;
+                        }
+                        curvature = train->currentFirstLink->curvature;
+                        linkMaxSpeed = train->currentFirstLink->freeFlowSpeed;
+                    } else if (!train->currentLinks.empty()) {
+                        auto fallbackLink = train->currentLinks.front();
+                        if (fallbackLink != nullptr) {
+                            if (!fallbackLink->grade.empty()) {
+                                grade = fallbackLink->grade.begin()->second;
+                            }
+                            curvature = fallbackLink->curvature;
+                            linkMaxSpeed = fallbackLink->freeFlowSpeed;
+                        }
+                    }
+
+                    if (!train->locomotives.empty()) {
+                        notch = train->locomotives.front()->currentLocNotch;
+                    }
+
+                    state["speed_mps"] = train->currentSpeed;
+                    state["position_m"] = train->travelledDistance;
+                    state["grade_perc"] = grade;
+                    state["curvature_perc"] = curvature;
+                    state["remaining_dist_m"] = std::max(0.0, train->trainTotalPathLength - train->travelledDistance);
+                    state["energy_kwh"] = train->energyStat;
+                    state["link_max_speed_mps"] = linkMaxSpeed;
+                    state["terminated"] = train->reachedDestination;
+                    state["notch"] = notch;
+                }
+
+                const QByteArray json = QJsonDocument(state).toJson(QJsonDocument::Compact);
+                std::cout << "NTS_JSON " << json.constData() << std::endl;
+                std::cout.flush();
+            };
+
+            std::string inputLine;
+            while (std::getline(std::cin, inputLine)) {
+                QJsonParseError parseError;
+                const QJsonDocument inputDoc = QJsonDocument::fromJson(
+                    QByteArray::fromStdString(inputLine), &parseError);
+                if (parseError.error != QJsonParseError::NoError || !inputDoc.isObject()) {
+                    throw std::runtime_error("Interactive input must be a JSON object, e.g. {\"notch\": 3}");
+                }
+
+                int notch = inputDoc.object().value("notch").toInt(0);
+                notch = std::clamp(notch, 0, 8);
+
+                auto currentTrains = SimulatorAPI::ContinuousMode::getTrains(NETWORK_NAME);
+                for (auto &train : currentTrains) {
+                    train->optimize = true;
+                    train->optimumThrottleLevels.clear();
+                    train->lookAheadCounterToUpdate = 1;
+
+                    int maxNotch = 8;
+                    if (!train->locomotives.empty()) {
+                        const auto &loc = train->locomotives.front();
+                        maxNotch = std::max(1, loc->Nmax);
+                    }
+                    const int appliedNotch = std::clamp(notch, 0, maxNotch);
+                    const double throttle = std::pow(static_cast<double>(appliedNotch) / static_cast<double>(maxNotch), 2.0);
+                    train->optimumThrottleLevel = throttle;
+
+                    for (auto &locomotive : train->locomotives) {
+                        locomotive->currentLocNotch = appliedNotch;
+                        locomotive->throttleLevel = throttle;
+                    }
+                }
+
+                sim->runOneTimeStep();
+                emitInteractiveState();
+
+                if (sim->checkAllTrainsReachedDestination()) {
+                    break;
+                }
+            }
+
+            sim->finalizeSimulation();
+            QCoreApplication::processEvents();
+            std::cout << "Output folder: " << sim->getOutputFolder() << std::endl;
+        } else {
+            // run the actual simulation
+            std::cout <<"Starting the Simulator!                                "
+                         "              \n";
+            sim->runSimulation();
+            // Drain any queued Qt events posted during simulation (e.g. from
+            // queued signal connections in SimulatorAPI) before QCoreApplication
+            // is destroyed.  Without this the static SimulatorAPI singleton
+            // outlives QCoreApplication and the deferred event delivery triggers
+            // a use-after-free segfault during app destruction.
+            QCoreApplication::processEvents();
+            std::cout << "Output folder: " << sim->getOutputFolder() << std::endl;
+        }
 
         // qDebug() << "\nType name for 65537:" << QMetaType::typeName(65537);
     } catch (const std::exception& e) {
