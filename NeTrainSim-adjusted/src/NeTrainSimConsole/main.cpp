@@ -321,39 +321,49 @@ int main(int argc, char *argv[])
 
             std::string inputLine;
             while (std::getline(std::cin, inputLine)) {
-                QJsonParseError parseError;
-                const QJsonDocument inputDoc = QJsonDocument::fromJson(
-                    QByteArray::fromStdString(inputLine), &parseError);
-                if (parseError.error != QJsonParseError::NoError || !inputDoc.isObject()) {
-                    throw std::runtime_error("Interactive input must be a JSON object, e.g. {\"notch\": 3}");
+                // Parse action JSON; finalize before re-throwing so output files flush.
+                int notch = 0;
+                try {
+                    QJsonParseError parseError;
+                    const QJsonDocument inputDoc = QJsonDocument::fromJson(
+                        QByteArray::fromStdString(inputLine), &parseError);
+                    if (parseError.error != QJsonParseError::NoError || !inputDoc.isObject()) {
+                        throw std::runtime_error("Interactive input must be a JSON object, e.g. {\"notch\": 3}");
+                    }
+                    notch = inputDoc.object().value("notch").toInt(0);
+                    notch = std::clamp(notch, 0, 8);
+                } catch (...) {
+                    sim->finalizeSimulation();
+                    QCoreApplication::processEvents();
+                    throw;
                 }
 
-                int notch = inputDoc.object().value("notch").toInt(0);
-                notch = std::clamp(notch, 0, 8);
-
+                // Apply RL notch directly via override path — bypasses the built-in
+                // A* optimizer so the agent's action is the actual throttle used.
                 auto currentTrains = SimulatorAPI::ContinuousMode::getTrains(NETWORK_NAME);
                 for (auto &train : currentTrains) {
-                    train->optimize = true;
-                    train->optimumThrottleLevels.clear();
-                    train->lookAheadCounterToUpdate = 1;
+                    train->optimize = false;
 
                     int maxNotch = 8;
                     if (!train->locomotives.empty()) {
-                        const auto &loc = train->locomotives.front();
-                        maxNotch = std::max(1, loc->Nmax);
+                        maxNotch = std::max(1, train->locomotives.front()->Nmax);
                     }
                     const int appliedNotch = std::clamp(notch, 0, maxNotch);
-                    const double throttle = std::pow(static_cast<double>(appliedNotch) / static_cast<double>(maxNotch), 2.0);
-                    train->optimumThrottleLevel = throttle;
+                    const double throttle = std::pow(
+                        static_cast<double>(appliedNotch) / static_cast<double>(maxNotch), 2.0);
 
                     for (auto &locomotive : train->locomotives) {
+                        locomotive->rlOverrideEnabled = true;
+                        locomotive->rlOverrideThrottle = throttle;
                         locomotive->currentLocNotch = appliedNotch;
-                        locomotive->throttleLevel = throttle;
                     }
                 }
 
                 sim->runOneTimeStep();
                 emitInteractiveState();
+                // Drain queued Qt events to prevent use-after-free in SimulatorAPI
+                // singleton (same issue documented after runSimulation below).
+                QCoreApplication::processEvents();
 
                 if (sim->checkAllTrainsReachedDestination()) {
                     break;

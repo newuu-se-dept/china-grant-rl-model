@@ -89,6 +89,10 @@ public:
 	double throttleLevel;
 	/** The throttle levels */
 	Vector<double> throttleLevels;
+    /** When true, getThrottleLevel returns rlOverrideThrottle directly,
+     *  bypassing both the speed-discretized governor and the A* optimizer. */
+    bool rlOverrideEnabled = false;
+    double rlOverrideThrottle = 0.0;
 	/** (Immutable) the gravitation acceleration */
 	const double g = 9.8067;
 
