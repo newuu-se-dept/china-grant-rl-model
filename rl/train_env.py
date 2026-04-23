@@ -16,6 +16,7 @@ Action space: Discrete(9) — notch 0-8 (maps to locomotive currentLocNotch)
 
 import json
 import os
+import select
 import subprocess
 import time
 
@@ -35,23 +36,33 @@ TRAINS_FILE = os.path.join(_REPO, "data", "netrainsim", "trainsFile.dat")
 
 TOTAL_ROUTE_LENGTH_M = 74_869.6  # computed from coordinates.csv
 STATE_PREFIX = "NTS_JSON "
+MAX_STEPS = 10_000  # hard ceiling above the nominal ~6,700-step trip
+
+# Normalisation denominators for _state_to_obs
+_SPEED_MAX     = 15.0   # loco max ≈ 14.86 m/s
+_GRADE_MAX     = 0.7    # route max ±0.628%
+_ENERGY_MAX    = 0.25   # per-step energy cap in kWh (observed max ~0.2, headroom to 0.25)
+_MAXSPEED_MAX  = 22.2   # route speed-limit max in m/s (80 km/h)
+
+_LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
 
 
 class NeTrainSimEnv(gym.Env):
     metadata = {"render_modes": []}
 
+    # All 7 features are normalized to roughly [-1, 1] or [0, 1] by _state_to_obs.
     observation_space = Box(
-        low=np.array([0, 0, -15, -10, 0, 0, 0], dtype=np.float32),
-        high=np.array([100, TOTAL_ROUTE_LENGTH_M + 500, 15, 10,
-                       TOTAL_ROUTE_LENGTH_M + 500, 1e5, 100], dtype=np.float32),
+        low =np.array([0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+        high=np.array([2.0, 1.0,  1.0,  1.0, 1.0, 1.0, 2.0], dtype=np.float32),
     )
     action_space = Discrete(9)  # notch 0-8
 
     def __init__(self):
         super().__init__()
         self._proc: subprocess.Popen | None = None
+        self._stderr_log = None   # file handle for simulator stderr
         self._last_state: dict | None = None
-        self._prev_energy: float = 0.0
+        self._cum_energy_kwh: float = 0.0   # running total for logging/reward only
         self._step_count: int = 0
         self._episode_count: int = 0
         self._episode_start: float = 0.0
@@ -73,13 +84,18 @@ class NeTrainSimEnv(gym.Env):
         self.close()
         self._step_count = 0
         self._episode_reward = 0.0
+        self._cum_energy_kwh = 0.0
         self._episode_start = time.time()
         self._episode_count += 1
         self._start_interactive_simulator()
         state = self._send_action_and_read_state(0)
         self._last_state = state
-        self._prev_energy = float(state["energy_kwh"])
-        obs = self._state_to_obs(state)
+        step_energy = float(state["energy_kwh"])
+        self._cum_energy_kwh = step_energy  # include bootstrap step-0 energy
+        # Bootstrap consumed one simulator timestep (notch=0 sent to get initial
+        # state). Start _step_count at 1 so it tracks actual simulator steps.
+        self._step_count = 1
+        obs = self._state_to_obs(state, step_energy)
         # Return empty info dict — tianshou 0.5.1 Batch cannot create new keys
         # via index assignment, so any non-empty info dict causes a ValueError.
         return obs, {}
@@ -93,20 +109,22 @@ class NeTrainSimEnv(gym.Env):
         self._last_state = state
         self._step_count += 1
 
-        obs = self._state_to_obs(state)
-        energy_kwh = float(state["energy_kwh"])
+        # energy_kwh from the simulator is per-step energy (not cumulative).
+        # EnergyConsumption_KWH in the CSV oscillates 0–0.2 kWh per step
+        # depending on throttle; cumEnergyStat (total) reaches ~1,200 kWh.
+        step_energy_kwh = float(state["energy_kwh"])
+        self._cum_energy_kwh += step_energy_kwh
+
+        obs = self._state_to_obs(state, step_energy_kwh)
         speed_mps = float(state["speed_mps"])
         max_speed = float(state["link_max_speed_mps"])
         position_m = float(state["position_m"])
 
-        delta_energy  = energy_kwh - self._prev_energy
-        self._prev_energy = energy_kwh
-
         speed_penalty = 0.1 * max(0.0, speed_mps - max_speed)
-        reward = -delta_energy - speed_penalty
+        reward = -step_energy_kwh - speed_penalty
 
         terminated = bool(state["terminated"]) or position_m >= TOTAL_ROUTE_LENGTH_M
-        truncated = False
+        truncated = self._step_count >= MAX_STEPS and not terminated
 
         if terminated:
             reward += 100.0
@@ -120,7 +138,8 @@ class NeTrainSimEnv(gym.Env):
             print(
                 f"\r  ep={self._episode_count}  step={self._step_count:5d}"
                 f"  pos={position_m:7.0f}m ({pct:4.1f}%)"
-                f"  speed={speed_mps:5.2f}m/s  energy={energy_kwh:7.3f}kWh"
+                f"  speed={speed_mps:5.2f}m/s"
+                f"  cum_energy={self._cum_energy_kwh:7.1f}kWh"
                 f"  notch={notch}",
                 end="", flush=True,
             )
@@ -131,11 +150,12 @@ class NeTrainSimEnv(gym.Env):
             line = (
                 f"[{status}] ep={self._episode_count}"
                 f"  steps={self._step_count}  dist={position_m:.0f}m"
-                f"  energy={energy_kwh:.3f}kWh  reward={self._episode_reward:+.1f}"
+                f"  total_energy={self._cum_energy_kwh:.1f}kWh"
+                f"  reward={self._episode_reward:+.1f}"
                 f"  time={elapsed:.1f}s"
             )
-            # Pad to 80 chars to overwrite any leftover progress text on the line
-            print(f"\r{line:<80}", flush=True)
+            # Pad to 90 chars to overwrite any leftover progress text on the line
+            print(f"\r{line:<90}", flush=True)
 
         # Return empty info dict — tianshou 0.5.1 Batch cannot create new keys
         # via index assignment, so any non-empty info dict causes a ValueError.
@@ -156,10 +176,25 @@ class NeTrainSimEnv(gym.Env):
                     self._proc.kill()
                     self._proc.wait(timeout=5)
             self._proc = None
+        if self._stderr_log is not None:
+            try:
+                self._stderr_log.close()
+            except Exception:
+                pass
+            self._stderr_log = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     # ── Internal helpers ────────────────────────────────────────────────────
 
     def _start_interactive_simulator(self) -> None:
+        os.makedirs(_LOGS_DIR, exist_ok=True)
+        stderr_path = os.path.join(_LOGS_DIR, "netrainsim_stderr.log")
+        self._stderr_log = open(stderr_path, "a")
         self._proc = subprocess.Popen(
             [SIMULATOR_BIN,
              "-n", NODES_FILE,
@@ -169,7 +204,7 @@ class NeTrainSimEnv(gym.Env):
              "-I"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=self._stderr_log,
             text=True,
             bufsize=1,
         )
@@ -185,12 +220,21 @@ class NeTrainSimEnv(gym.Env):
         except BrokenPipeError as exc:
             raise RuntimeError("Simulator stdin pipe is closed.") from exc
 
+        _READLINE_TIMEOUT = 30.0
         while True:
+            ready, _, _ = select.select([self._proc.stdout], [], [], _READLINE_TIMEOUT)
+            if not ready:
+                rc = self._proc.poll()
+                raise RuntimeError(
+                    f"Simulator stalled: no output for {_READLINE_TIMEOUT}s "
+                    f"(returncode={rc}). Check logs/netrainsim_stderr.log"
+                )
             line = self._proc.stdout.readline()
             if line == "":
                 rc = self._proc.poll()
                 raise RuntimeError(
-                    f"Simulator terminated before returning state. returncode={rc}"
+                    f"Simulator terminated before returning state "
+                    f"(returncode={rc}). Check logs/netrainsim_stderr.log"
                 )
             line = line.strip()
             if not line.startswith(STATE_PREFIX):
@@ -202,15 +246,16 @@ class NeTrainSimEnv(gym.Env):
                 raise RuntimeError(f"Invalid simulator state JSON: {raw_json}") from exc
             return state
 
-    def _state_to_obs(self, state: dict) -> np.ndarray:
+    def _state_to_obs(self, state: dict, step_energy_kwh: float) -> np.ndarray:
         position = float(state["position_m"])
-        remaining  = max(0.0, TOTAL_ROUTE_LENGTH_M - position)
-        return np.array([
-            float(state["speed_mps"]),
-            position,
-            float(state["grade_perc"]),
+        remaining = max(0.0, TOTAL_ROUTE_LENGTH_M - position)
+        obs = np.array([
+            float(state["speed_mps"])          / _SPEED_MAX,
+            position                           / TOTAL_ROUTE_LENGTH_M,
+            float(state["grade_perc"])         / _GRADE_MAX,
             float(state["curvature_perc"]),
-            remaining,
-            float(state["energy_kwh"]),
-            float(state["link_max_speed_mps"]),
+            remaining                          / TOTAL_ROUTE_LENGTH_M,
+            step_energy_kwh                    / _ENERGY_MAX,
+            float(state["link_max_speed_mps"]) / _MAXSPEED_MAX,
         ], dtype=np.float32)
+        return np.clip(obs, self.observation_space.low, self.observation_space.high)
