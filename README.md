@@ -35,8 +35,8 @@ python rl/train.py
 | `NeTrainSim-adjusted/` | C++ freight train simulator (source + build) |
 | `rl/train_env.py` | Gymnasium environment wrapping the simulator |
 | `rl/train.py` | Tianshou REINFORCE training script |
-| `venv/` | Python virtualenv (gymnasium 1.3.0, tianshou 0.5.1, torch) |
 | `CLAUDE.md` | Architecture reference and agent instructions |
+| `requirements.txt` | Dependencies such as `gymnasium`, `tianshou`, `torch`, etc. |
 
 ## Gotchas discovered during setup
 

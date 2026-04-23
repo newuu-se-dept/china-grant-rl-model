@@ -17,6 +17,7 @@ Action space: Discrete(9) — notch 0-8 (maps to locomotive currentLocNotch)
 import json
 import os
 import subprocess
+import time
 
 import gymnasium as gym
 import numpy as np
@@ -51,6 +52,10 @@ class NeTrainSimEnv(gym.Env):
         self._proc: subprocess.Popen | None = None
         self._last_state: dict | None = None
         self._prev_energy: float = 0.0
+        self._step_count: int = 0
+        self._episode_count: int = 0
+        self._episode_start: float = 0.0
+        self._episode_reward: float = 0.0
 
         if not os.path.isfile(SIMULATOR_BIN):
             raise FileNotFoundError(
@@ -66,12 +71,18 @@ class NeTrainSimEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.close()
+        self._step_count = 0
+        self._episode_reward = 0.0
+        self._episode_start = time.time()
+        self._episode_count += 1
         self._start_interactive_simulator()
         state = self._send_action_and_read_state(0)
         self._last_state = state
         self._prev_energy = float(state["energy_kwh"])
         obs = self._state_to_obs(state)
-        return obs, {"mode": "interactive"}
+        # Return empty info dict — tianshou 0.5.1 Batch cannot create new keys
+        # via index assignment, so any non-empty info dict causes a ValueError.
+        return obs, {}
 
     def step(self, action: int):
         notch = int(action)
@@ -80,6 +91,7 @@ class NeTrainSimEnv(gym.Env):
 
         state = self._send_action_and_read_state(notch)
         self._last_state = state
+        self._step_count += 1
 
         obs = self._state_to_obs(state)
         energy_kwh = float(state["energy_kwh"])
@@ -101,14 +113,33 @@ class NeTrainSimEnv(gym.Env):
         elif truncated:
             reward -= 50.0
 
-        info = {
-            "notch":      notch,
-            "energy_kwh": energy_kwh,
-            "speed_mps":  speed_mps,
-            "position_m": position_m,
-            "timestep": float(state["timestep"]),
-        }
-        return obs, float(reward), terminated, truncated, info
+        self._episode_reward += reward
+
+        if self._step_count % 500 == 0:
+            pct = 100.0 * position_m / TOTAL_ROUTE_LENGTH_M
+            print(
+                f"\r  ep={self._episode_count}  step={self._step_count:5d}"
+                f"  pos={position_m:7.0f}m ({pct:4.1f}%)"
+                f"  speed={speed_mps:5.2f}m/s  energy={energy_kwh:7.3f}kWh"
+                f"  notch={notch}",
+                end="", flush=True,
+            )
+
+        if terminated or truncated:
+            elapsed = time.time() - self._episode_start
+            status = "ARRIVED" if terminated else "TIMEOUT"
+            line = (
+                f"[{status}] ep={self._episode_count}"
+                f"  steps={self._step_count}  dist={position_m:.0f}m"
+                f"  energy={energy_kwh:.3f}kWh  reward={self._episode_reward:+.1f}"
+                f"  time={elapsed:.1f}s"
+            )
+            # Pad to 80 chars to overwrite any leftover progress text on the line
+            print(f"\r{line:<80}", flush=True)
+
+        # Return empty info dict — tianshou 0.5.1 Batch cannot create new keys
+        # via index assignment, so any non-empty info dict causes a ValueError.
+        return obs, float(reward), terminated, truncated, {}
 
     def close(self):
         if self._proc is None:

@@ -10,6 +10,7 @@ Run:
 
 import os
 import sys
+import time
 
 import torch
 from tianshou.data import Collector, VectorReplayBuffer
@@ -38,6 +39,23 @@ STEP_PER_EPOCH       = 10_000  # roughly one full A→B episode at default speed
 
 def make_env():
     return NeTrainSimEnv()
+
+
+_train_start = time.time()
+
+
+def train_fn(epoch: int, env_step: int) -> None:
+    elapsed = time.time() - _train_start
+    print(
+        f"\n{'='*65}\n"
+        f"  Epoch {epoch:3d}/{MAX_EPOCH}  |  env_step={env_step:,}  |  elapsed={elapsed/60:.1f}min\n"
+        f"{'='*65}",
+        flush=True,
+    )
+
+
+def test_fn(epoch: int, env_step: int) -> None:
+    print(f"  [test episode — epoch {epoch}]", flush=True)
 
 
 def main():
@@ -86,11 +104,16 @@ def main():
         episode_per_test=EPISODES_PER_TEST,
         batch_size=BATCH_SIZE,
         episode_per_collect=EPISODES_PER_COLLECT,
+        train_fn=train_fn,
+        test_fn=test_fn,
+        verbose=True,
+        show_progress=True,
     )
 
     print("Starting REINFORCE training on NeTrainSimEnv.")
     print("Each episode = one full A→B trip (~74.9 km, ~6700 simulator steps).")
-    print(f"Training for {MAX_EPOCH} epochs × {STEP_PER_EPOCH} steps/epoch.\n")
+    print(f"Training for {MAX_EPOCH} epochs × {STEP_PER_EPOCH} steps/epoch.")
+    print("Progress: ep=episode  step=sim-step  pos=distance  energy=cumulative kWh\n")
 
     result = trainer.run()
     print(f"\nTraining complete: {result}")
