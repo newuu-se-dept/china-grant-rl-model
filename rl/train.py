@@ -1,9 +1,7 @@
 """
 REINFORCE (Vanilla Policy Gradient) training on NeTrainSimEnv using Tianshou 0.5.1.
 
-Phase 1 note: actions do not yet feed back to the simulator (see train_env.py).
-The pipeline is correct end-to-end; replace Phase 1 env with Phase 2 (interactive
-C++ mode) to get real RL control. See CLAUDE.md "C++ Modifications Required".
+Actions are fed to NeTrainSim interactive mode each timestep (notch 0-8).
 
 Run:
     source venv/bin/activate
@@ -12,6 +10,7 @@ Run:
 
 import os
 import sys
+import time
 
 import torch
 from tianshou.data import Collector, VectorReplayBuffer
@@ -27,19 +26,36 @@ from rl.train_env import NeTrainSimEnv
 DEVICE = "cpu"
 HIDDEN_SIZES = [128, 64]
 LR = 3e-4
-DISCOUNT = 0.99
+DISCOUNT = 0.999  # 0.99 → horizon ~100 steps; 0.999 → ~1000 (visible over 6700-step episodes)
 MAX_EPOCH = 200
 # episode_per_collect=1: collect one full A→B episode per policy update
 # (on-policy REINFORCE requires complete episodes)
 EPISODES_PER_COLLECT = 1
 EPISODES_PER_TEST    = 1
-REPEAT_PER_COLLECT   = 4     # gradient update passes over the collected batch
+REPEAT_PER_COLLECT   = 1     # REINFORCE has no importance correction; >1 biases gradient
 BATCH_SIZE           = 512   # rows sampled per gradient step (trajectory has ~6700 rows)
-STEP_PER_EPOCH       = 10_000  # roughly one full A→B episode at default speed
+STEP_PER_EPOCH       = 7_000  # aligned to one full episode (~6700 steps + margin)
 
 
 def make_env():
     return NeTrainSimEnv()
+
+
+_train_start = time.time()
+
+
+def train_fn(epoch: int, env_step: int) -> None:
+    elapsed = time.time() - _train_start
+    print(
+        f"\n{'='*65}\n"
+        f"  Epoch {epoch:3d}/{MAX_EPOCH}  |  env_step={env_step:,}  |  elapsed={elapsed/60:.1f}min\n"
+        f"{'='*65}",
+        flush=True,
+    )
+
+
+def test_fn(epoch: int, env_step: int) -> None:
+    print(f"  [test episode — epoch {epoch}]", flush=True)
 
 
 def main():
@@ -63,6 +79,13 @@ def main():
 
     optim = torch.optim.Adam(actor.parameters(), lr=LR)
 
+    # PGPolicy in Tianshou 0.5.1 has no max_grad_norm param; clip via optimizer hook.
+    _orig_step = optim.step
+    def _clipped_step(*args, **kwargs):
+        torch.nn.utils.clip_grad_norm_(actor.parameters(), 0.5)
+        return _orig_step(*args, **kwargs)
+    optim.step = _clipped_step  # type: ignore[method-assign]
+
     policy = PGPolicy(
         model=actor,
         optim=optim,
@@ -72,8 +95,8 @@ def main():
     )
 
     # ── Collectors + Buffer ───────────────────────────────────────────────
-    # Buffer large enough for one full episode (~6700 steps + headroom)
-    buffer = VectorReplayBuffer(total_size=15_000, buffer_num=1)
+    # Buffer sized for exactly one full episode (~6700 steps + margin)
+    buffer = VectorReplayBuffer(total_size=8_000, buffer_num=1)
     train_collector = Collector(policy, train_envs, buffer)
     test_collector  = Collector(policy, test_envs)
 
@@ -88,11 +111,16 @@ def main():
         episode_per_test=EPISODES_PER_TEST,
         batch_size=BATCH_SIZE,
         episode_per_collect=EPISODES_PER_COLLECT,
+        train_fn=train_fn,
+        test_fn=test_fn,
+        verbose=True,
+        show_progress=True,
     )
 
     print("Starting REINFORCE training on NeTrainSimEnv.")
     print("Each episode = one full A→B trip (~74.9 km, ~6700 simulator steps).")
-    print(f"Training for {MAX_EPOCH} epochs × {STEP_PER_EPOCH} steps/epoch.\n")
+    print(f"Training for {MAX_EPOCH} epochs × {STEP_PER_EPOCH} steps/epoch.")
+    print("Progress: ep=episode  step=sim-step  pos=distance  energy=cumulative kWh\n")
 
     result = trainer.run()
     print(f"\nTraining complete: {result}")
