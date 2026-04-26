@@ -26,23 +26,25 @@ from gymnasium.spaces import Box, Discrete
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+import platform as _platform
+_BUILD_DIR = "build-linux" if _platform.system() == "Linux" else "build-mac"
 SIMULATOR_BIN = os.path.join(
-    _REPO, "NeTrainSim-adjusted", "build-mac",
+    _REPO, "NeTrainSim-adjusted", _BUILD_DIR,
     "src", "NeTrainSimConsole", "NeTrainSim"
 )
-NODES_FILE  = os.path.join(_REPO, "data", "netrainsim", "nodesFile.dat")
-LINKS_FILE  = os.path.join(_REPO, "data", "netrainsim", "linksFile.dat")
-TRAINS_FILE = os.path.join(_REPO, "data", "netrainsim", "trainsFile.dat")
+NODES_FILE  = os.path.join(_REPO, "data", "netrainsim_v2", "nodesFile_v2_fixed.dat")
+LINKS_FILE  = os.path.join(_REPO, "data", "netrainsim_v2", "linksFile_v2_fixed.dat")
+TRAINS_FILE = os.path.join(_REPO, "data", "netrainsim_v2", "trainsFile_rl.dat")
 
-TOTAL_ROUTE_LENGTH_M = 74_869.6  # computed from coordinates.csv
+TOTAL_ROUTE_LENGTH_M = 74_891.29  # sum of all 1499 link lengths (linksFile_v2_fixed.dat)
 STATE_PREFIX = "NTS_JSON "
 MAX_STEPS = 10_000  # hard ceiling above the nominal ~6,700-step trip
 
 # Normalisation denominators for _state_to_obs
-_SPEED_MAX     = 15.0   # loco max ≈ 14.86 m/s
+_SPEED_MAX     = 20.0   # ER9E max ≈ 19.4 m/s (links speed limit)
 _GRADE_MAX     = 0.7    # route max ±0.628%
 _ENERGY_MAX    = 0.25   # per-step energy cap in kWh (observed max ~0.2, headroom to 0.25)
-_MAXSPEED_MAX  = 22.2   # route speed-limit max in m/s (80 km/h)
+_MAXSPEED_MAX  = 19.4   # ER9E route speed-limit max in m/s (70 km/h)
 
 _LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
 
@@ -71,7 +73,7 @@ class NeTrainSimEnv(gym.Env):
         if not os.path.isfile(SIMULATOR_BIN):
             raise FileNotFoundError(
                 f"Simulator binary not found: {SIMULATOR_BIN}\n"
-                "Run: cd NeTrainSim-adjusted && ./build-mac.sh"
+                "Run: cd NeTrainSim-adjusted && ./build-linux.sh  (or build-mac.sh on macOS)"
             )
         if not os.path.isfile(NODES_FILE):
             raise FileNotFoundError(
