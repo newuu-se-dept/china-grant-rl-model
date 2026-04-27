@@ -20,13 +20,13 @@ import sys
 import torch
 import numpy as np
 from tianshou.utils.net.common import Net
-from tianshou.utils.net.discrete import Actor
-from tianshou.policy import PGPolicy
+from tianshou.utils.net.discrete import Actor, Critic
+from tianshou.policy import PPOPolicy
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from rl.train_env import NeTrainSimEnv, TOTAL_ROUTE_LENGTH_M
 
-DEVICE       = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE       = "cpu"
 HIDDEN_SIZES = [256, 128, 64]
 N_ACTIONS    = 9
 OBS_SHAPE    = (7,)
@@ -42,26 +42,30 @@ def find_latest_checkpoint() -> str:
     files = sorted(f for f in os.listdir(CHECKPOINT_DIR) if f.endswith(".pth"))
     if not files:
         raise FileNotFoundError("No .pth checkpoint files found in checkpoints/")
-    # prefer final, otherwise latest epoch
     if "policy_final.pth" in files:
         return os.path.join(CHECKPOINT_DIR, "policy_final.pth")
     return os.path.join(CHECKPOINT_DIR, files[-1])
 
 
-def build_policy(checkpoint_path: str) -> PGPolicy:
-    net   = Net(state_shape=OBS_SHAPE, hidden_sizes=HIDDEN_SIZES, device=DEVICE)
-    actor = Actor(
-        preprocess_net=net,
-        action_shape=N_ACTIONS,
-        softmax_output=True,
-        device=DEVICE,
-    ).to(DEVICE)
-    optim = torch.optim.Adam(actor.parameters())
-    policy = PGPolicy(
-        model=actor,
+def build_policy(checkpoint_path: str) -> PPOPolicy:
+    net_actor  = Net(state_shape=OBS_SHAPE, hidden_sizes=HIDDEN_SIZES, device=DEVICE)
+    net_critic = Net(state_shape=OBS_SHAPE, hidden_sizes=HIDDEN_SIZES, device=DEVICE)
+    actor  = Actor(net_actor,  action_shape=N_ACTIONS, softmax_output=True, device=DEVICE).to(DEVICE)
+    critic = Critic(net_critic, device=DEVICE).to(DEVICE)
+    optim  = torch.optim.Adam(list(actor.parameters()) + list(critic.parameters()))
+    policy = PPOPolicy(
+        actor=actor,
+        critic=critic,
         optim=optim,
         dist_fn=torch.distributions.Categorical,
         discount_factor=DISCOUNT,
+        eps_clip=0.2,
+        advantage_normalization=True,
+        vf_coef=0.5,
+        ent_coef=0.01,
+        gae_lambda=0.95,
+        reward_normalization=True,
+        max_grad_norm=0.5,
     )
     state_dict = torch.load(checkpoint_path, map_location=DEVICE)
     policy.load_state_dict(state_dict)
@@ -70,7 +74,7 @@ def build_policy(checkpoint_path: str) -> PGPolicy:
     return policy
 
 
-def run_episode(policy: PGPolicy, output_path: str) -> None:
+def run_episode(policy: PPOPolicy, output_path: str) -> None:
     env = NeTrainSimEnv()
     obs, _ = env.reset()
 
@@ -104,16 +108,9 @@ def run_episode(policy: PGPolicy, output_path: str) -> None:
         cum_energy     += step_energy_kwh
 
         rows.append({
-            "timestep_s":        step,
-            "position_m":        round(position_m, 3),
-            "speed_mps":         round(speed_mps, 4),
-            "notch":             notch,
-            "grade_perc":        round(grade_perc, 6),
-            "curvature_perc":    round(curvature_perc, 6),
-            "link_max_speed_mps": round(link_max_speed, 3),
-            "step_energy_kwh":   round(step_energy_kwh, 6),
-            "cum_energy_kwh":    round(cum_energy, 4),
-            "reward":            round(float(reward), 4),
+            "position_m": round(position_m, 3),
+            "speed_mps":  round(speed_mps, 4),
+            "notch":      notch,
         })
 
         step += 1
@@ -130,9 +127,7 @@ def run_episode(policy: PGPolicy, output_path: str) -> None:
 
     # Write CSV
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    fieldnames = ["timestep_s", "position_m", "speed_mps", "notch",
-                  "grade_perc", "curvature_perc", "link_max_speed_mps",
-                  "step_energy_kwh", "cum_energy_kwh", "reward"]
+    fieldnames = ["position_m", "speed_mps", "notch"]
     with open(output_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

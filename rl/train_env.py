@@ -38,7 +38,8 @@ TRAINS_FILE = os.path.join(_REPO, "data", "netrainsim_v2", "trainsFile_rl.dat")
 
 TOTAL_ROUTE_LENGTH_M = 74_891.29  # sum of all 1499 link lengths (linksFile_v2_fixed.dat)
 STATE_PREFIX = "NTS_JSON "
-MAX_STEPS = 10_000  # hard ceiling above the nominal ~6,700-step trip
+MAX_STEPS    = 10_000  # hard ceiling above the nominal ~6,700-step trip
+TARGET_STEPS = 4_500   # schedule target: trips longer than this incur a time penalty (4500s ≈ 75 min)
 
 # Normalisation denominators for _state_to_obs
 _SPEED_MAX     = 20.0   # ER9E max ≈ 19.4 m/s (links speed limit)
@@ -129,35 +130,27 @@ class NeTrainSimEnv(gym.Env):
         truncated = self._step_count >= MAX_STEPS and not terminated
 
         if terminated:
-            reward += 100.0
+            # Arrival bonus minus time penalty for trips slower than schedule target
+            time_penalty = 0.05 * max(0.0, float(self._step_count - TARGET_STEPS))
+            reward += 100.0 - time_penalty
         elif truncated:
             reward -= 50.0
 
         self._episode_reward += reward
 
-        if self._step_count % 500 == 0:
-            pct = 100.0 * position_m / TOTAL_ROUTE_LENGTH_M
-            print(
-                f"\r  ep={self._episode_count}  step={self._step_count:5d}"
-                f"  pos={position_m:7.0f}m ({pct:4.1f}%)"
-                f"  speed={speed_mps:5.2f}m/s"
-                f"  cum_energy={self._cum_energy_kwh:7.1f}kWh"
-                f"  notch={notch}",
-                end="", flush=True,
-            )
-
         if terminated or truncated:
             elapsed = time.time() - self._episode_start
-            status = "ARRIVED" if terminated else "TIMEOUT"
-            line = (
-                f"[{status}] ep={self._episode_count}"
-                f"  steps={self._step_count}  dist={position_m:.0f}m"
-                f"  total_energy={self._cum_energy_kwh:.1f}kWh"
-                f"  reward={self._episode_reward:+.1f}"
-                f"  time={elapsed:.1f}s"
+            pct = 100.0 * position_m / TOTAL_ROUTE_LENGTH_M
+            status = "✓ ARRIVED" if terminated else "✗ TIMEOUT"
+            print(
+                f"[{status}]  ep={self._episode_count:>4d}"
+                f"  {self._step_count:>5,} steps"
+                f"  {position_m:>7,.0f}m ({pct:4.1f}%)"
+                f"  energy={self._cum_energy_kwh:>7.1f} kWh"
+                f"  reward={self._episode_reward:>+8.1f}"
+                f"  {elapsed:.1f}s",
+                flush=True,
             )
-            # Pad to 90 chars to overwrite any leftover progress text on the line
-            print(f"\r{line:<90}", flush=True)
 
         # Return empty info dict — tianshou 0.5.1 Batch cannot create new keys
         # via index assignment, so any non-empty info dict causes a ValueError.
