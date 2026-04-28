@@ -24,7 +24,7 @@ from tianshou.utils.net.discrete import Actor, Critic
 from tianshou.policy import PPOPolicy
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from rl.train_env import NeTrainSimEnv, TOTAL_ROUTE_LENGTH_M
+from rl.train_env import NeTrainSimEnv, TOTAL_ROUTE_LENGTH_M, NODES_FILE, LINKS_FILE
 
 DEVICE       = "cpu"
 HIDDEN_SIZES = [256, 128, 64]
@@ -34,6 +34,46 @@ DISCOUNT     = 0.999
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results")
 CHECKPOINT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "checkpoints")
+
+
+def load_path_coordinates() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Build cumulative-distance → (x, y) lookup along the route.
+    Returns three parallel arrays (cum_pos_m, x_m, y_m) so np.interp can
+    map any position-along-path to (x_m, y_m) by linear interpolation.
+    """
+    nodes: dict[int, tuple[float, float]] = {}
+    with open(NODES_FILE) as f:
+        f.readline()                # header line
+        f.readline()                # count / scales line
+        for line in f:
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            nid = int(parts[0])
+            x = float(parts[1]); y = float(parts[2])
+            nodes[nid] = (x, y)
+
+    # Walk links in order; cumulative distance at each visited node.
+    cum, xs, ys = [0.0], [], []
+    first_id = None
+    with open(LINKS_FILE) as f:
+        f.readline()                # header
+        f.readline()                # count / scales
+        for line in f:
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            from_id = int(parts[1]); to_id = int(parts[2])
+            length  = float(parts[3])
+            if first_id is None:
+                first_id = from_id
+                xs.append(nodes[from_id][0])
+                ys.append(nodes[from_id][1])
+            cum.append(cum[-1] + length)
+            xs.append(nodes[to_id][0])
+            ys.append(nodes[to_id][1])
+    return np.array(cum), np.array(xs), np.array(ys)
 
 
 def find_latest_checkpoint() -> str:
@@ -78,6 +118,8 @@ def run_episode(policy: PPOPolicy, output_path: str) -> None:
     env = NeTrainSimEnv()
     obs, _ = env.reset()
 
+    cum_pos, xs, ys = load_path_coordinates()
+
     rows = []
     step = 0
     cum_energy = 0.0
@@ -85,8 +127,8 @@ def run_episode(policy: PPOPolicy, output_path: str) -> None:
     truncated  = False
 
     print("Running evaluation episode...")
-    print(f"{'Step':>6}  {'Position(m)':>12}  {'Speed(m/s)':>10}  {'Notch':>5}  "
-          f"{'Grade(%)':>8}  {'SpeedLimit':>10}  {'StepEnergy':>10}  {'CumEnergy':>10}")
+    print(f"{'Step':>6}  {'Pos(m)':>10}  {'X(m)':>12}  {'Y(m)':>12}  "
+          f"{'Speed(m/s)':>10}  {'Notch':>5}  {'CumEnergy':>10}")
     print("-" * 80)
 
     while not (terminated or truncated):
@@ -101,24 +143,24 @@ def run_episode(policy: PPOPolicy, output_path: str) -> None:
         state = env._last_state
         position_m      = float(state["position_m"])
         speed_mps       = float(state["speed_mps"])
-        grade_perc      = float(state["grade_perc"])
-        curvature_perc  = float(state["curvature_perc"])
-        link_max_speed  = float(state["link_max_speed_mps"])
         step_energy_kwh = float(state["energy_kwh"])
         cum_energy     += step_energy_kwh
 
+        # Interpolate (x, y) at the train's current position along the path
+        x_m = float(np.interp(position_m, cum_pos, xs))
+        y_m = float(np.interp(position_m, cum_pos, ys))
+
         rows.append({
-            "position_m": round(position_m, 3),
-            "speed_mps":  round(speed_mps, 4),
-            "notch":      notch,
+            "x_m":       round(x_m, 3),
+            "y_m":       round(y_m, 3),
+            "speed_mps": round(speed_mps, 4),
+            "notch":     notch,
         })
 
         step += 1
         if step % 500 == 0:
-            pct = 100.0 * position_m / TOTAL_ROUTE_LENGTH_M
-            print(f"{step:>6}  {position_m:>12.1f}  {speed_mps:>10.3f}  {notch:>5}  "
-                  f"{grade_perc:>8.4f}  {link_max_speed:>10.3f}  "
-                  f"{step_energy_kwh:>10.5f}  {cum_energy:>10.3f}")
+            print(f"{step:>6}  {position_m:>10.1f}  {x_m:>12.1f}  {y_m:>12.1f}  "
+                  f"{speed_mps:>10.3f}  {notch:>5}  {cum_energy:>10.3f}")
 
     env.close()
 
@@ -127,7 +169,7 @@ def run_episode(policy: PPOPolicy, output_path: str) -> None:
 
     # Write CSV
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    fieldnames = ["position_m", "speed_mps", "notch"]
+    fieldnames = ["x_m", "y_m", "speed_mps", "notch"]
     with open(output_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

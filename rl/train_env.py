@@ -39,7 +39,14 @@ TRAINS_FILE = os.path.join(_REPO, "data", "netrainsim_v2", "trainsFile_rl.dat")
 TOTAL_ROUTE_LENGTH_M = 74_891.29  # sum of all 1499 link lengths (linksFile_v2_fixed.dat)
 STATE_PREFIX = "NTS_JSON "
 MAX_STEPS    = 10_000  # hard ceiling above the nominal ~6,700-step trip
-TARGET_STEPS = 4_500   # schedule target: trips longer than this incur a time penalty (4500s ≈ 75 min)
+TARGET_STEPS = 4_500   # schedule target: trips longer than this incur a time penalty
+
+# Reward shaping — calibrated so completing the trip dominates any "stop early" strategy.
+# Each meter forward earns a small reward; total summed over a complete trip equals PROGRESS_BONUS.
+PROGRESS_BONUS    = 1500.0   # roughly cancels typical energy cost (~1050 kWh) over a complete trip
+ARRIVAL_BONUS     = 200.0    # one-shot reward at terminus
+TIMEOUT_PENALTY   = 1500.0   # large enough that giving up is never the best option
+TIME_COST_PER_STEP = 0.05    # late-arrival penalty per step over TARGET_STEPS
 
 # Normalisation denominators for _state_to_obs
 _SPEED_MAX     = 20.0   # ER9E max ≈ 19.4 m/s (links speed limit)
@@ -70,6 +77,7 @@ class NeTrainSimEnv(gym.Env):
         self._episode_count: int = 0
         self._episode_start: float = 0.0
         self._episode_reward: float = 0.0
+        self._last_position_m: float = 0.0  # for per-step progress reward
 
         if not os.path.isfile(SIMULATOR_BIN):
             raise FileNotFoundError(
@@ -88,6 +96,7 @@ class NeTrainSimEnv(gym.Env):
         self._step_count = 0
         self._episode_reward = 0.0
         self._cum_energy_kwh = 0.0
+        self._last_position_m = 0.0
         self._episode_start = time.time()
         self._episode_count += 1
         self._start_interactive_simulator()
@@ -95,6 +104,7 @@ class NeTrainSimEnv(gym.Env):
         self._last_state = state
         step_energy = float(state["energy_kwh"])
         self._cum_energy_kwh = step_energy  # include bootstrap step-0 energy
+        self._last_position_m = float(state["position_m"])
         # Bootstrap consumed one simulator timestep (notch=0 sent to get initial
         # state). Start _step_count at 1 so it tracks actual simulator steps.
         self._step_count = 1
@@ -123,18 +133,24 @@ class NeTrainSimEnv(gym.Env):
         max_speed = float(state["link_max_speed_mps"])
         position_m = float(state["position_m"])
 
+        # Per-step progress reward: each meter forward earns a small bonus.
+        # Summed over a complete trip this equals PROGRESS_BONUS, so completion
+        # is always more rewarding than stopping (no "give up and idle" hack).
+        delta_pos_m = max(0.0, position_m - self._last_position_m)
+        self._last_position_m = position_m
+        progress_reward = PROGRESS_BONUS * (delta_pos_m / TOTAL_ROUTE_LENGTH_M)
+
         speed_penalty = 0.1 * max(0.0, speed_mps - max_speed)
-        reward = -step_energy_kwh - speed_penalty
+        reward = -step_energy_kwh - speed_penalty + progress_reward
 
         terminated = bool(state["terminated"]) or position_m >= TOTAL_ROUTE_LENGTH_M
         truncated = self._step_count >= MAX_STEPS and not terminated
 
         if terminated:
-            # Arrival bonus minus time penalty for trips slower than schedule target
-            time_penalty = 0.05 * max(0.0, float(self._step_count - TARGET_STEPS))
-            reward += 100.0 - time_penalty
+            time_penalty = TIME_COST_PER_STEP * max(0.0, float(self._step_count - TARGET_STEPS))
+            reward += ARRIVAL_BONUS - time_penalty
         elif truncated:
-            reward -= 50.0
+            reward -= TIMEOUT_PENALTY
 
         self._episode_reward += reward
 
