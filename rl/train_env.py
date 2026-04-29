@@ -44,7 +44,7 @@ TARGET_STEPS = 4_500   # schedule target: trips longer than this incur a time pe
 # Reward shaping — calibrated so completing the trip dominates any "stop early" strategy.
 # Each meter forward earns a small reward; total summed over a complete trip equals PROGRESS_BONUS.
 PROGRESS_BONUS    = 1500.0   # roughly cancels typical energy cost (~1050 kWh) over a complete trip
-ARRIVAL_BONUS     = 2000.0    # one-shot reward at terminus
+ARRIVAL_BONUS     = 200.0    # one-shot reward at terminus
 TIMEOUT_PENALTY   = 1500.0   # large enough that giving up is never the best option
 TIME_COST_PER_STEP = 0.05    # late-arrival penalty per step over TARGET_STEPS
 
