@@ -33,7 +33,7 @@ SIMULATOR_BIN = os.path.join(
     "src", "NeTrainSimConsole", "NeTrainSim"
 )
 NODES_FILE  = os.path.join(_REPO, "data", "netrainsim_v2", "nodesFile_v2_fixed.dat")
-LINKS_FILE  = os.path.join(_REPO, "data", "netrainsim_v2", "linksFile_v2_fixed.dat")
+LINKS_FILE  = os.path.join(_REPO, "data", "netrainsim_v2", "linksFile_v2_fixed_speed.dat")
 TRAINS_FILE = os.path.join(_REPO, "data", "netrainsim_v2", "trainsFile_rl.dat")
 
 TOTAL_ROUTE_LENGTH_M = 74_891.29  # sum of all 1499 link lengths (linksFile_v2_fixed.dat)
@@ -44,7 +44,7 @@ TARGET_STEPS = 4_500   # schedule target: trips longer than this incur a time pe
 # Reward shaping — calibrated so completing the trip dominates any "stop early" strategy.
 # Each meter forward earns a small reward; total summed over a complete trip equals PROGRESS_BONUS.
 PROGRESS_BONUS    = 1500.0   # roughly cancels typical energy cost (~1050 kWh) over a complete trip
-ARRIVAL_BONUS     = 200.0    # one-shot reward at terminus
+ARRIVAL_BONUS     = 2000.0    # one-shot reward at terminus
 TIMEOUT_PENALTY   = 1500.0   # large enough that giving up is never the best option
 TIME_COST_PER_STEP = 0.05    # late-arrival penalty per step over TARGET_STEPS
 
