@@ -33,7 +33,7 @@ SIMULATOR_BIN = os.path.join(
     "src", "NeTrainSimConsole", "NeTrainSim"
 )
 NODES_FILE  = os.path.join(_REPO, "data", "netrainsim_v2", "nodesFile_v2_fixed.dat")
-LINKS_FILE  = os.path.join(_REPO, "data", "netrainsim_v2", "linksFile_v2_fixed.dat")
+LINKS_FILE  = os.path.join(_REPO, "data", "netrainsim_v2", "linksFile_v2_fixed_speed.dat")
 TRAINS_FILE = os.path.join(_REPO, "data", "netrainsim_v2", "trainsFile_rl.dat")
 
 TOTAL_ROUTE_LENGTH_M = 74_891.29  # sum of all 1499 link lengths (linksFile_v2_fixed.dat)
@@ -47,6 +47,13 @@ PROGRESS_BONUS    = 1500.0   # roughly cancels typical energy cost (~1050 kWh) o
 ARRIVAL_BONUS     = 200.0    # one-shot reward at terminus
 TIMEOUT_PENALTY   = 1500.0   # large enough that giving up is never the best option
 TIME_COST_PER_STEP = 0.05    # late-arrival penalty per step over TARGET_STEPS
+
+# Speed-deficit penalty: punish going slower than the link's speed limit.
+# Without this, the agent picks the lowest possible constant notch (notch=1)
+# because per-step (energy-cost vs progress-reward) is roughly flat across
+# notches. With this penalty the agent must adapt notch to terrain to keep
+# speed near the limit, so notch varies by grade and speed-limit zone.
+SPEED_DEFICIT_COEF = 0.02    # penalty per step per (m/s) below speed limit
 
 # Normalisation denominators for _state_to_obs
 _SPEED_MAX     = 20.0   # ER9E max ≈ 19.4 m/s (links speed limit)
@@ -140,8 +147,20 @@ class NeTrainSimEnv(gym.Env):
         self._last_position_m = position_m
         progress_reward = PROGRESS_BONUS * (delta_pos_m / TOTAL_ROUTE_LENGTH_M)
 
-        speed_penalty = 0.1 * max(0.0, speed_mps - max_speed)
-        reward = -step_energy_kwh - speed_penalty + progress_reward
+        # Penalty for going slower than the speed limit — forces the agent to
+        # adapt notch to terrain and speed-limit zone (otherwise notch collapses
+        # to a constant minimum value).
+        speed_deficit = max(0.0, max_speed - speed_mps)
+        speed_deficit_penalty = SPEED_DEFICIT_COEF * speed_deficit
+        # Existing over-speed penalty (kept).
+        speed_over_penalty = 0.1 * max(0.0, speed_mps - max_speed)
+
+        reward = (
+            -step_energy_kwh
+            - speed_over_penalty
+            - speed_deficit_penalty
+            + progress_reward
+        )
 
         terminated = bool(state["terminated"]) or position_m >= TOTAL_ROUTE_LENGTH_M
         truncated = self._step_count >= MAX_STEPS and not terminated

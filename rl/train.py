@@ -73,6 +73,13 @@ def test_fn(epoch: int, env_step: int) -> None:
     print(f"  [test]", flush=True)
 
 
+def save_best_fn(pol) -> None:
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    best_path = os.path.join(CHECKPOINT_DIR, "policy_best.pth")
+    torch.save(pol.state_dict(), best_path)
+    print(f"  → new best saved: {best_path}", flush=True)
+
+
 def main():
     global policy
 
@@ -146,6 +153,7 @@ def main():
         episode_per_collect=EPISODES_PER_COLLECT,
         train_fn=train_fn,
         test_fn=test_fn,
+        save_best_fn=save_best_fn,
         verbose=True,
         show_progress=True,
     )

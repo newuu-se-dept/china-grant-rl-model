@@ -82,6 +82,8 @@ def find_latest_checkpoint() -> str:
     files = sorted(f for f in os.listdir(CHECKPOINT_DIR) if f.endswith(".pth"))
     if not files:
         raise FileNotFoundError("No .pth checkpoint files found in checkpoints/")
+    if "policy_best.pth" in files:
+        return os.path.join(CHECKPOINT_DIR, "policy_best.pth")
     if "policy_final.pth" in files:
         return os.path.join(CHECKPOINT_DIR, "policy_final.pth")
     return os.path.join(CHECKPOINT_DIR, files[-1])
