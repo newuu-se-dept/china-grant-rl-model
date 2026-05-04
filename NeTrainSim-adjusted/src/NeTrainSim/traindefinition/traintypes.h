@@ -485,6 +485,27 @@ namespace TrainTypes {
         return ss;
     }
 
+    /** The brake shoe type count. */
+    static const int brakeShoeTypeN = 2;
+
+    /** Values that represent brake shoe types. */
+    enum class _BrakeShoeType {
+        castIron,
+        composition
+    };
+
+    /** Type of the brake shoe. */
+    using BrakeShoeType = _BrakeShoeType;
+
+    /** The brake shoe type strings[] */
+    static const std::string brakeShoeTypeStrings[] = {
+        "Cast Iron",
+        "Composition"
+    };
+
+    inline std::string brakeShoeTypeToStr(BrakeShoeType type) {
+        return brakeShoeTypeStrings[static_cast<int>(type)];
+    }
 
     /**
      * *********************************************************************

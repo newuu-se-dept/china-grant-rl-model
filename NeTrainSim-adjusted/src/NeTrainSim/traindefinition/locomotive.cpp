@@ -216,7 +216,9 @@ Locomotive::Locomotive(double locomotiveMaxPower_kw,
         this->hybridMethod = TrainTypes::LocomotivePowerMethod::notApplicable;
     }
 
-};	
+    this->brakedWeightRatio = EC::DefaultLocomotiveBrakedWeightRatio;
+
+};
 
 
 double Locomotive::getHyperbolicThrottleCoef(double & trainSpeed)
@@ -382,18 +384,38 @@ double Locomotive::getTractiveForce(double &frictionCoef,
 	}
 	double f1,f = 0;
 	f1 = frictionCoef * this->currentWeight * 1000 * this->g;
+
+	double throttle = this->getThrottleLevel(trainSpeed, optimize,
+	                                         optimumThrottleLevel);
 	if (trainSpeed == 0) {
-		this->maxTractiveForce = f1;
-		return f1;
+		double startForce = f1;
+		if (this->powerType == TrainTypes::PowerType::electric) {
+			startForce = std::min(f1, 0.55 * f1 * std::max(throttle, 0.1));
+		}
+		this->maxTractiveForce = startForce;
+		return startForce;
 	}
     else {
 
-        f = min((this->locPowerReductionFactor * 1000.0 *
-                 this->transmissionEfficiency *
-                 this->getThrottleLevel(trainSpeed, optimize,
-                                        optimumThrottleLevel) *
-                 (EC::getLocomotivePowerReductionFactor(this->powerType) *
-                    this->maxPower) / trainSpeed), f1);
+        double powerLimitedForce =
+            (this->locPowerReductionFactor * 1000.0 *
+             this->transmissionEfficiency *
+             throttle *
+             (EC::getLocomotivePowerReductionFactor(this->powerType) *
+                this->maxPower) / trainSpeed);
+
+        // Older resistor/contactor electric control has a low-speed force cap.
+        if (this->powerType == TrainTypes::PowerType::electric) {
+            double v_kmh = trainSpeed * 3.6;
+            double ramp = std::min(v_kmh /
+                                   EC::LegacyElectricControllerFullForceSpeed_kmh,
+                                   1.0);
+            double controllerForceCap = (0.35 + 0.65 * ramp) * f1 *
+                                        std::max(throttle, 0.1);
+            powerLimitedForce = std::min(powerLimitedForce, controllerForceCap);
+        }
+
+        f = min(powerLimitedForce, f1);
 		this->maxTractiveForce = f;
 		return f;
 	};
@@ -416,6 +438,10 @@ double Locomotive::getRegenerativeEffeciency(
                          double& trainAcceleration,
                          double &trainSpeed)
 {
+    if (this->powerType == TrainTypes::PowerType::electric) {
+        return 0.0;
+    }
+
     // if it is a regenerative locomotive, regenerate energy
     if (TrainTypes::locomotiveRechargableTechnologies.exist(this->powerType)) {
         // get regenerative eff
@@ -541,12 +567,20 @@ double Locomotive::getEnergyConsumption(double& LocomotiveVirtualTractivePower,
 		return EC;
 	}
     else {
-        // get regenerative eff
+        if (this->powerType == TrainTypes::PowerType::electric) {
+            return this->auxiliaryPower * unitConversionFactor;
+        }
+
+        // Blended braking: only the dynamic portion (motor as generator) is recoverable.
+        // Friction braking energy is dissipated as heat.
+        double recoverablePower =
+            -this->getRecoverableBrakingPower(tractivePower, trainSpeed);
+
         double regenerativeEff =
             this->getRegenerativeEffeciency(tractivePower,
                                             trainAcceleration, trainSpeed);
 
-        return ((tractivePower * regenerativeEff + this->auxiliaryPower) *
+        return ((recoverablePower * regenerativeEff + this->auxiliaryPower) *
                 EC::getDriveLineEff(trainSpeed,
                                     this->currentLocNotch,
                                     std::abs(powerPortion),
@@ -554,7 +588,7 @@ double Locomotive::getEnergyConsumption(double& LocomotiveVirtualTractivePower,
                                     this->hybridMethod) *
                 unitConversionFactor);
 
-	}
+    }
 }
 
 double Locomotive::getUsedPowerPortion(double trainSpeed,
@@ -566,6 +600,29 @@ double Locomotive::getUsedPowerPortion(double trainSpeed,
     // it is limited because at the begining of the deceleration, the
     // power is very high
     return std::min((LocomotiveVirtualTractivePower) / maxPower, 1.0);
+}
+
+double Locomotive::getRecoverableBrakingPower(double totalBrakingPower,
+                                              double trainSpeed)
+{
+    if (this->powerType == TrainTypes::PowerType::electric) {
+        return 0.0;
+    }
+
+    if (!TrainTypes::locomotiveRechargableTechnologies.exist(this->powerType)) {
+        return 0.0;
+    }
+
+    // Motor's max dynamic braking power is approximately its rated traction power
+    double maxDynamicPower = this->maxPower * 1000.0; // kW to W
+
+    // Dynamic braking fades linearly below 15 km/h (motor can't generate
+    // sufficient back-EMF at very low speeds)
+    double v_kmh = trainSpeed * 3.6;
+    double fadeFactor = std::min(v_kmh / EC::DynamicBrakingFadeSpeed_kmh, 1.0);
+    maxDynamicPower *= fadeFactor;
+
+    return std::min(std::abs(totalBrakingPower), maxDynamicPower);
 }
 
 double Locomotive::getMaxRechargeEnergy(double timeStep, double trainSpeed,
@@ -855,14 +912,15 @@ double Locomotive::getResistance(double trainSpeed)
     // conversions factors from meteric system
     double rVal = 0.0;
     double speed = trainSpeed * 2.23694;
-    rVal = 1.5 + 18 / ((this->currentWeight * 1.10231) /
-                this->noOfAxiles) + 0.03 * speed
-        + (this->frontalArea * 10.7639) * this->dragCoef * (pow(speed, 2)) /
+    rVal = EC::LegacyResistanceBase + 18 / ((this->currentWeight * 1.10231) /
+                this->noOfAxiles) + EC::LegacyResistanceSpeedCoeff * speed
+        + (this->frontalArea * 10.7639) *
+          (this->dragCoef * EC::LegacyResistanceDragScale) * (pow(speed, 2)) /
                  (this->currentWeight * 1.10231);
     rVal = (rVal) *
                ((this->currentWeight * 1.10231)) + 20 *
                (this->currentWeight * 1.10231) * (this->trackGrade);
-    rVal += abs(this->trackCurvature) * 20 * 0.04 *
+    rVal += abs(this->trackCurvature) * 20 * EC::LegacyResistanceCurvatureCoeff *
                (this->currentWeight * 1.10231);
     rVal *= (4.44822);
     return rVal;

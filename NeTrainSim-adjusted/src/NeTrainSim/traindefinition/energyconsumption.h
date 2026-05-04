@@ -17,8 +17,8 @@ namespace EC {
 // ##################################################################
 // #             start: define locomotive default values            #
 // ##################################################################
-	/** (Immutable) the default locomotive auxiliary power */
-	static constexpr double DefaultLocomotiveAuxiliaryPower = 0.0;
+  /** (Immutable) the default locomotive auxiliary power (kW). */
+  static constexpr double DefaultLocomotiveAuxiliaryPower = 35.0;
     /** The default electric locomotive battery maximum charge in kWh.
 	 Battery capacity of up to 2.5 megawatt hours. */
     static double DefaultLocomotiveBatteryMaxCharge_Electric = 5000.0;
@@ -147,6 +147,25 @@ namespace EC {
     static double DefaultHydrogenDensity = 0.000099836;
     /** The gamma for regenerating energy */
 	static double gamma = 0.65;
+
+    /** Legacy electric EMU control efficiency model (ER9-like) */
+    static constexpr double LegacyElectricControlEff_Start = 0.68;
+    static constexpr double LegacyElectricControlEff_Mid = 0.80;
+    static constexpr double LegacyElectricControlEff_High = 0.88;
+    static constexpr double LegacyElectricSpeed_StartToMid_kmh = 20.0;
+    static constexpr double LegacyElectricSpeed_MidToHigh_kmh = 60.0;
+
+    /** Legacy drivetrain wheel->DC bus model cap for electric EMUs */
+    static constexpr double LegacyElectricWheelToDCBusMaxEff = 0.85;
+
+    /** Low-speed controller force cap fully relaxes near this speed (km/h) */
+    static constexpr double LegacyElectricControllerFullForceSpeed_kmh = 40.0;
+
+    /** Davis-like resistance tuning for older EMU stock */
+    static constexpr double LegacyResistanceBase = 2.2;
+    static constexpr double LegacyResistanceSpeedCoeff = 0.04;
+    static constexpr double LegacyResistanceCurvatureCoeff = 0.025;
+    static constexpr double LegacyResistanceDragScale = 1.15;
 
     /** Fuel conversion factors for different car types */
     static std::map<TrainTypes::CarType, double> fuelConversionFactor_carTypes = {
@@ -301,6 +320,34 @@ namespace EC {
      * @returns The fuel conversion factor.
      */
     double getFuelConversionFactor(TrainTypes::CarType carType);
+
+    /** (Immutable) gravitational acceleration (m/s^2) */
+    static constexpr double g = 9.8066;
+    /** (Immutable) default braked weight ratio for locomotives */
+    static constexpr double DefaultLocomotiveBrakedWeightRatio = 0.9;
+    /** (Immutable) default braked weight ratio for cargo cars */
+    static constexpr double DefaultCarBrakedWeightRatio_Cargo = 0.6;
+    /** (Immutable) default braked weight ratio for tender cars */
+    static constexpr double DefaultCarBrakedWeightRatio_Tender = 0.7;
+
+    /** (Immutable) the speed below which dynamic braking fades to zero (km/h) */
+    static constexpr double DynamicBrakingFadeSpeed_kmh = 15.0;
+
+    /**
+     * Gets the brake shoe friction coefficient using the Karwatzki model.
+     *
+     * @details For cast-iron shoes (UIC standard):
+     *   mu(v) = 0.6 * (v_kmh + 100) / (5 * v_kmh + 100)
+     * For composition shoes:
+     *   mu(v) = 0.36 * (v_kmh + 150) / (2 * v_kmh + 150)
+     *
+     * @param speed_mps  Train speed in m/s.
+     * @param shoeType   Type of brake shoe (default: castIron).
+     * @returns The brake shoe friction coefficient (dimensionless).
+     */
+    double getBrakeShoeFriction(double speed_mps,
+                                TrainTypes::BrakeShoeType shoeType =
+                                TrainTypes::BrakeShoeType::castIron);
 }
 
 

@@ -1,6 +1,33 @@
 #include "traintypes.h"
 #include "energyconsumption.h"
+#include <algorithm>
 #include <cmath>
+
+namespace {
+    // Legacy AC->DC contactor control (ER9-like): losses are high at low speed,
+    // then improve as resistor stages are bypassed.
+    double getLegacyElectricControlEff(double speed_mps, int notchNumberIndex) {
+        double v_kmh = speed_mps * 3.6;
+
+        double baseEff = EC::LegacyElectricControlEff_Start;
+        if (v_kmh < EC::LegacyElectricSpeed_StartToMid_kmh) {
+            baseEff = EC::LegacyElectricControlEff_Start;
+        }
+        else if (v_kmh < EC::LegacyElectricSpeed_MidToHigh_kmh) {
+            baseEff = EC::LegacyElectricControlEff_Mid;
+        }
+        else {
+            baseEff = EC::LegacyElectricControlEff_High;
+        }
+
+        // Notch progression slightly raises effective control efficiency.
+        double notchGain = 0.0;
+        if (notchNumberIndex > 0) {
+            notchGain = std::min(0.05, notchNumberIndex * 0.005);
+        }
+        return std::min(baseEff + notchGain, 0.90);
+    }
+}
 
 
 namespace EC {
@@ -11,6 +38,12 @@ namespace EC {
                            TrainTypes::LocomotivePowerMethod hybridMethod) {
 
         double wheelToDCBusEff = getWheelToDCBusEff(trainSpeed);
+
+        if (powerType == TrainTypes::PowerType::electric) {
+            return wheelToDCBusEff *
+                   getLegacyElectricControlEff(trainSpeed, notchNumberIndex);
+        }
+
         double DCBusToTank = getDCBusToTankEff(powerAtWheelProportion, powerType, hybridMethod);
         return wheelToDCBusEff * DCBusToTank;
     }
@@ -58,13 +91,16 @@ namespace EC {
         // get the wheel to DC Bus effeciency
         // check which range the speed is in
         if (speed <= 58.2) {
-            wheelToDCBusEff = 0.2 + 0.0261*speed - 0.0003 *
+            wheelToDCBusEff = 0.17 + 0.0240*speed - 0.00028 *
                                                          std::pow(speed, (double)2.0) +
-                              0.000001 * std::pow(speed, (double)3.0);
+                              0.0000009 * std::pow(speed, (double)3.0);
         }
         else {
-            wheelToDCBusEff = 0.9;  // constant efficiency
+            wheelToDCBusEff = EC::LegacyElectricWheelToDCBusMaxEff;
         }
+
+        wheelToDCBusEff = std::max(0.05, std::min(wheelToDCBusEff,
+                                                  EC::LegacyElectricWheelToDCBusMaxEff));
         return wheelToDCBusEff;
     }
 
@@ -157,6 +193,18 @@ namespace EC {
 
     double getFuelConversionFactor(TrainTypes::CarType carType) {
         return fuelConversionFactor_carTypes[carType];
+    }
+
+    double getBrakeShoeFriction(double speed_mps,
+                                TrainTypes::BrakeShoeType shoeType) {
+        double v_kmh = speed_mps * 3.6;
+        switch (shoeType) {
+        case TrainTypes::BrakeShoeType::composition:
+            return 0.36 * (v_kmh + 150.0) / (2.0 * v_kmh + 150.0);
+        case TrainTypes::BrakeShoeType::castIron:
+        default:
+            return 0.6 * (v_kmh + 100.0) / (5.0 * v_kmh + 100.0);
+        }
     }
 
 }

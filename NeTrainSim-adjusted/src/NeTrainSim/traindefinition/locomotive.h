@@ -385,6 +385,17 @@ public:
     double getEnergyConsumptionAtTank(double &LocomotiveVirtualTractivePower,
                                       double &trainSpeed,
                                       double EnergyConsumptionAtDCBus);
+
+    /**
+     * Gets the recoverable portion of braking power.
+     *
+     * @param totalBrakingPower The total braking power (negative during deceleration).
+     * @param trainSpeed The train speed in m/s.
+     * @returns The recoverable braking power in watts.
+     */
+    double getRecoverableBrakingPower(double totalBrakingPower,
+                                      double trainSpeed);
+
 	/**
      * Gets energy consumption of this locomotive.
 	 *

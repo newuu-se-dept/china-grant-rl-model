@@ -43,6 +43,10 @@ public:
 	double currentWeight;
     /** The light weight of the vehicle when the train is travelling */
 	double emptyWeight;
+    /** The proportion of vehicle weight that is braked. */
+    double brakedWeightRatio;
+    /** Gets the brake force available from this vehicle at the given speed. */
+    virtual double getBrakingForce(double trainSpeed);
 	/** The number of axiles the car has */
 	int noOfAxiles;
 	/** Auxiliary power */

@@ -76,6 +76,12 @@ Car::Car(double carLength_m, double carDragCoef,
 
     } // end else if
 
+    if (this->carType == TrainTypes::CarType::cargo) {
+        this->brakedWeightRatio = EC::DefaultCarBrakedWeightRatio_Cargo;
+    } else {
+        this->brakedWeightRatio = EC::DefaultCarBrakedWeightRatio_Tender;
+    }
+
     this->hostLink = std::shared_ptr<NetLink>(); // assign empty placeholder
     this->trackCurvature = 0; // zero initialized
     this->trackGrade = 0;   // zero initialized
@@ -106,10 +112,12 @@ double Car::getResistance(double trainSpeed) {
 
     double rVal; // resistance value placeholder definition
     trainSpeed *= 2.23694;  // convert m/s to mph
-	rVal = 1.5 + 18 / ((this->currentWeight * 1.10231) / this->noOfAxiles) + 0.03 * trainSpeed
-		+ (this->frontalArea * 10.7639) * this->dragCoef * (pow(trainSpeed, 2)) / (this->currentWeight * 1.10231);
+  rVal = EC::LegacyResistanceBase + 18 / ((this->currentWeight * 1.10231) / this->noOfAxiles)
+    + EC::LegacyResistanceSpeedCoeff * trainSpeed
+    + (this->frontalArea * 10.7639) * (this->dragCoef * EC::LegacyResistanceDragScale) *
+      (pow(trainSpeed, 2)) / (this->currentWeight * 1.10231);
 	rVal = (rVal) * ((this->currentWeight * 1.10231)) + 20 * (this->currentWeight * 1.10231) * (this->trackGrade);
-	rVal += abs(this->trackCurvature) * 20 * 0.04 * (this->currentWeight * 1.10231);
+  rVal += abs(this->trackCurvature) * 20 * EC::LegacyResistanceCurvatureCoeff * (this->currentWeight * 1.10231);
     rVal *= (4.44822); // convert to N
 	return rVal;
 }
