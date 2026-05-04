@@ -24,6 +24,12 @@ void TrainComponent::setCurrentWeight(double newCurrentWeight) {
     } // end if
 }
 
+double TrainComponent::getBrakingForce(double trainSpeed) {
+    // Basic brake model: brake effort proportional to braked weight and gravity.
+    // Future work: incorporate speed-dependent brake shoe friction and dynamic braking.
+    return this->brakedWeightRatio * this->currentWeight * 1000.0 * EC::g;
+}
+
 // consume the fuel required by the locomotive
 std::pair<bool,double> TrainComponent::consumeFuel(double timeStep, double trainSpeed,
                                                    double EC_kwh,
