@@ -128,7 +128,7 @@ def run_episode(policy: PPOPolicy, output_path: str) -> None:
 
     print("Running evaluation episode...")
     print(f"{'Step':>6}  {'Pos(m)':>10}  {'X(m)':>12}  {'Y(m)':>12}  "
-          f"{'Speed(m/s)':>10}  {'Notch':>5}  {'CumEnergy':>10}")
+          f"{'Speed(m/s)':>10}  {'Speed(km/h)':>12}  {'Notch':>5}  {'CumEnergy':>10}")
     print("-" * 80)
 
     while not (terminated or truncated):
@@ -143,6 +143,7 @@ def run_episode(policy: PPOPolicy, output_path: str) -> None:
         state = env._last_state
         position_m      = float(state["position_m"])
         speed_mps       = float(state["speed_mps"])
+        speed_kmh       = speed_mps * 3.6
         step_energy_kwh = float(state["energy_kwh"])
         cum_energy     += step_energy_kwh
 
@@ -160,7 +161,7 @@ def run_episode(policy: PPOPolicy, output_path: str) -> None:
         step += 1
         if step % 500 == 0:
             print(f"{step:>6}  {position_m:>10.1f}  {x_m:>12.1f}  {y_m:>12.1f}  "
-                  f"{speed_mps:>10.3f}  {notch:>5}  {cum_energy:>10.3f}")
+                  f"{speed_mps:>10.3f}  {speed_kmh:>12.3f}  {notch:>5}  {cum_energy:>10.3f}")
 
     env.close()
 

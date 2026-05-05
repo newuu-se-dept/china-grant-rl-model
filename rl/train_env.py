@@ -39,20 +39,20 @@ TRAINS_FILE = os.path.join(_REPO, "data", "netrainsim_v2", "trainsFile_rl.dat")
 TOTAL_ROUTE_LENGTH_M = 74_891.29  # sum of all 1499 link lengths (linksFile_v2_fixed.dat)
 STATE_PREFIX = "NTS_JSON "
 MAX_STEPS    = 10_000  # hard ceiling above the nominal ~6,700-step trip
-TARGET_STEPS = 4_500   # schedule target: trips longer than this incur a time penalty
+TARGET_STEPS = 4   # schedule target: trips longer than this incur a time penalty
 
 # Reward shaping — calibrated so completing the trip dominates any "stop early" strategy.
 # Each meter forward earns a small reward; total summed over a complete trip equals PROGRESS_BONUS.
 PROGRESS_BONUS    = 1500.0   # roughly cancels typical energy cost (~1050 kWh) over a complete trip
-ARRIVAL_BONUS     = 200.0    # one-shot reward at terminus
-TIMEOUT_PENALTY   = 1500.0   # large enough that giving up is never the best option
-TIME_COST_PER_STEP = 0.05    # late-arrival penalty per step over TARGET_STEPS
+ARRIVAL_BONUS     = 2000.0    # one-shot reward at terminus
+TIMEOUT_PENALTY   = 15000.0   # large enough that giving up is never the best option
+TIME_COST_PER_STEP = 0.5    # late-arrival penalty per step over TARGET_STEPS
 
 # Normalisation denominators for _state_to_obs
-_SPEED_MAX     = 20.0   # ER9E max ≈ 19.4 m/s (links speed limit)
+_SPEED_MAX     = 22.2   # ER9E max ≈ 19.4 m/s (links speed limit)
 _GRADE_MAX     = 0.7    # route max ±0.628%
 _ENERGY_MAX    = 0.25   # per-step energy cap in kWh (observed max ~0.2, headroom to 0.25)
-_MAXSPEED_MAX  = 19.4   # ER9E route speed-limit max in m/s (70 km/h)
+_MAXSPEED_MAX  = 22.2   # ER9E route speed-limit max in m/s (70 km/h)
 
 _LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
 
