@@ -37,7 +37,7 @@ NUM_TEST_ENVS  = 1
 HIDDEN_SIZES = [256, 128, 64]
 LR           = 3e-4
 DISCOUNT     = 0.99    # was 0.999 — shorter effective horizon (~100 steps), keeps advantages from collapsing
-MAX_EPOCH    = 30
+MAX_EPOCH    = 300
 
 EPISODES_PER_COLLECT = NUM_TRAIN_ENVS   # 8 parallel episodes before each update
 EPISODES_PER_TEST    = 1

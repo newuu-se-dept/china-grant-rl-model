@@ -44,9 +44,9 @@ TARGET_STEPS = 4   # schedule target: trips longer than this incur a time penalt
 # Reward shaping — calibrated so completing the trip dominates any "stop early" strategy.
 # Each meter forward earns a small reward; total summed over a complete trip equals PROGRESS_BONUS.
 PROGRESS_BONUS    = 1500.0   # roughly cancels typical energy cost (~1050 kWh) over a complete trip
-ARRIVAL_BONUS     = 2000.0    # one-shot reward at terminus
-TIMEOUT_PENALTY   = 15000.0   # large enough that giving up is never the best option
-TIME_COST_PER_STEP = 0.5    # late-arrival penalty per step over TARGET_STEPS
+ARRIVAL_BONUS     = 1000.0    # one-shot reward at terminus
+TIMEOUT_PENALTY   = 5000.0   # large enough that giving up is never the best option
+TIME_COST_PER_STEP = 0.1    # late-arrival penalty per step over TARGET_STEPS
 
 # Normalisation denominators for _state_to_obs
 _SPEED_MAX     = 22.2   # ER9E max ≈ 19.4 m/s (links speed limit)
