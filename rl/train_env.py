@@ -14,6 +14,7 @@ Observation space (7 floats):
 Action space: Discrete(9) — notch 0-8 (maps to locomotive currentLocNotch)
 """
 
+import csv
 import json
 import os
 import select
@@ -44,7 +45,14 @@ _GRADE_MAX     = 0.7    # route max ±0.628%
 _ENERGY_MAX    = 0.25   # per-step energy cap in kWh (observed max ~0.2, headroom to 0.25)
 _MAXSPEED_MAX  = 22.2   # route speed-limit max in m/s (80 km/h)
 
-_LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
+_LOGS_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
+_EPISODES_DIR    = os.path.join(_LOGS_DIR, "episodes")
+_TRAIN_LOG_PATH  = os.path.join(_LOGS_DIR, "training_log.csv")
+_STEP_LOG_COLS   = ["step", "notch", "speed_mps", "position_m", "grade_pct",
+                    "curvature_pct", "max_speed_mps", "step_energy_kwh",
+                    "cum_energy_kwh", "reward"]
+_TRAIN_LOG_COLS  = ["episode", "steps", "status", "total_energy_kwh",
+                    "total_reward", "elapsed_s", "timestamp"]
 
 
 class NeTrainSimEnv(gym.Env):
@@ -67,6 +75,9 @@ class NeTrainSimEnv(gym.Env):
         self._episode_count: int = 0
         self._episode_start: float = 0.0
         self._episode_reward: float = 0.0
+        self._step_log_fh  = None  # per-episode CSV file handle
+        self._step_log_csv = None  # csv.writer for per-episode CSV
+        self._ensure_log_dirs()
 
         if not os.path.isfile(SIMULATOR_BIN):
             raise FileNotFoundError(
