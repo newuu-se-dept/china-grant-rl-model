@@ -5,4 +5,5 @@ mkdir -p res
   -n src/data/sampleProject/nodesFile.dat \
   -l src/data/sampleProject/linksFile.dat \
   -t src/data/sampleProject/dieselTrain.dat \
+  -e true \
   -o res
