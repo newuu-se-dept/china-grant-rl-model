@@ -190,7 +190,10 @@ LinkMaxSpeed_mps, EnergyConsumption_KWH, DelayTimeToEach_s, DelayTime_s,
 Stoppings, tractiveForce_N, ResistanceForces_N, CurrentUsedTractivePower_kw,
 GradeAtTip_Perc, CurvatureAtTip_Perc, FirstLocoNotchPosition, optimizationEnabled
 ```
-`EnergyConsumption_KWH` is the cumulative total up to that timestep.
+`EnergyConsumption_KWH` is the **per-step** net energy consumed this timestep (kWh), not cumulative.
+It equals `train->energyStat = NEC - NER` where NEC/NER are reset at the start of each step.
+Values oscillate ~0–0.2 kWh depending on throttle; the running total (`cumEnergyStat`) reaches ~1,200 kWh for a full trip.
+The RL env tracks `_cum_energy_kwh` in Python by summing per-step values.
 
 ### Integration Strategy
 

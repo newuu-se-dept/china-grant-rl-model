@@ -3,6 +3,12 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# handoff md
+.continues-handoff.md
+
+# log
+log.txt
+
 # Mac
 .DS_Store
 

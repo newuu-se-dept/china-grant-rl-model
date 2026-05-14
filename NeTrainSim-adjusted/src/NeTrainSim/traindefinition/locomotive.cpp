@@ -305,6 +305,7 @@ double Locomotive::getThrottleLevel(double & trainSpeed,
                                     bool &optimize,
                                     double &optimumThrottleLevel)
 {
+    if (rlOverrideEnabled) { return rlOverrideThrottle; }
 	double currentThrottleLevel = 0;
 	double throttleL = 0;
 	throttleL = getDiscretizedThrottleCoef(trainSpeed);
@@ -322,6 +323,7 @@ double Locomotive::getThrottleLevel(double & trainSpeed,
 
 void Locomotive::updateLocNotch(double &trainSpeed)
 {
+    if (rlOverrideEnabled) { return; }
 	if (trainSpeed == 0.0 || !this->isLocOn) { this->currentLocNotch = 0; }
 	else {
 		// get the discretized Throttle Level and compare it to the list

@@ -2,6 +2,8 @@
 
 Reinforcement learning for train energy optimization. A Tianshou REINFORCE agent learns to control locomotive throttle (notch 0–8) each second to minimize energy over a 74.9 km A→B trip.
 
+Handoff between coding agents: `pnpm dlx continues`
+
 **Components:** NeTrainSim (C++ simulator) · Gymnasium env wrapper · Tianshou REINFORCE training
 
 ## Setup
@@ -33,8 +35,8 @@ python rl/train.py
 | `NeTrainSim-adjusted/` | C++ freight train simulator (source + build) |
 | `rl/train_env.py` | Gymnasium environment wrapping the simulator |
 | `rl/train.py` | Tianshou REINFORCE training script |
-| `venv/` | Python virtualenv (gymnasium 1.3.0, tianshou 0.5.1, torch) |
 | `CLAUDE.md` | Architecture reference and agent instructions |
+| `requirements.txt` | Dependencies such as `gymnasium`, `tianshou`, `torch`, etc. |
 
 ## Gotchas discovered during setup
 
